@@ -2,92 +2,118 @@
 <html lang="ko">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>좌표 0 에러 해결 버전</title>
-    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-core@4.10.0"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-converter@4.10.0"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-webgl@4.10.0"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/face-detection@1.0.2"></script>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>실시간 얼굴 인식 v0.6</title>
+    
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_detection/face_detection.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+
     <style>
-        body { margin: 0; background: #000; overflow: hidden; font-family: monospace; }
-        #container { position: relative; width: 100vw; height: 100vh; }
-        video { width: 100%; height: 100%; object-fit: contain; }
-        canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: contain; z-index: 10; pointer-events: none; }
-        #debug { position: fixed; top: 0; left: 0; right: 0; background: rgba(0,0,255,0.8); color: white; padding: 10px; z-index: 100; font-size: 11px; }
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: #f0f2f5;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            margin: 0;
+            padding: 20px;
+        }
+
+        h2 { color: #333; margin-bottom: 10px; }
+
+        .container {
+            position: relative;
+            width: 100%;
+            max-width: 640px; /* PC에서는 너무 커지지 않게 제한 */
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            background: #000;
+        }
+
+        /* 비디오는 숨기고 캔버스에 그립니다 */
+        video {
+            display: none; 
+        }
+
+        canvas {
+            width: 100%;
+            display: block;
+        }
+
+        .info-panel {
+            margin-top: 15px;
+            width: 100%;
+            max-width: 640px;
+            background: white;
+            padding: 15px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+        }
+
+        .status-msg {
+            font-weight: bold;
+            color: #007bff;
+            margin-bottom: 8px;
+        }
+
+        .coord-box {
+            font-family: monospace;
+            font-size: 0.9em;
+            color: #555;
+            background: #eee;
+            padding: 8px;
+            border-radius: 4px;
+            white-space: pre-wrap;
+        }
     </style>
 </head>
 <body>
-    <div id="debug">상태 확인 중...</div>
-    <div id="container">
-        <video id="video" autoplay playsinline muted></video>
-        <canvas id="canvas"></canvas>
+
+    <h2>📷 얼굴 인식 모니터</h2>
+
+    <div class="container">
+        <video class="input_video"></video>
+        <canvas class="output_canvas"></canvas>
+    </div>
+
+    <div class="info-panel">
+        <div class="status-msg" id="statusMsg">카메라 연결 대기 중...</div>
+        <div class="coord-box" id="coordInfo">얼굴이 감지되지 않았습니다.</div>
     </div>
 
     <script>
-        const video = document.getElementById('video');
-        const canvas = document.getElementById('canvas');
-        const ctx = canvas.getContext('2d');
-        const debug = document.getElementById('debug');
+        const videoElement = document.getElementsByClassName('input_video')[0];
+        const canvasElement = document.getElementsByClassName('output_canvas')[0];
+        const canvasCtx = canvasElement.getContext('2d');
+        const statusMsg = document.getElementById('statusMsg');
+        const coordInfo = document.getElementById('coordInfo');
 
-        async function init() {
-            try {
-                // 1. 백엔드 설정 (WebGL 우선, 안되면 CPU)
-                await tf.setBackend('webgl');
-                debug.innerText = "카메라 연결 중...";
+        function onResults(results) {
+            // 캔버스 크기를 비디오 비율에 맞춤
+            canvasElement.width = videoElement.videoWidth;
+            canvasElement.height = videoElement.videoHeight;
 
-                const stream = await navigator.mediaDevices.getUserMedia({
-                    video: { facingMode: "user", width: { ideal: 640 }, height: { ideal: 480 } },
-                    audio: false
-                });
-                video.srcObject = stream;
+            canvasCtx.save();
+            canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+            
+            // 1. 원본 비디오 그리기
+            canvasCtx.drawImage(
+                results.image, 0, 0, canvasElement.width, canvasElement.height);
 
-                // 2. 모델 로드 (최대한 가벼운 설정)
-                const detector = await faceDetection.createDetector(
-                    faceDetection.SupportedModels.MediaPipeFaceDetector,
-                    { runtime: 'tfjs', modelType: 'short' }
-                );
+            if (results.detections.length > 0) {
+                statusMsg.innerText = `🟢 감지됨: ${results.detections.length}명의 얼굴`;
+                statusMsg.style.color = "green";
+                
+                let coordText = "";
 
-                async function loop() {
-                    // 비디오 데이터가 유효한지(0이 아닌지) 체크
-                    if (video.readyState === 4 && video.videoWidth > 0) {
-                        
-                        if (canvas.width !== video.videoWidth) {
-                            canvas.width = video.videoWidth;
-                            canvas.height = video.videoHeight;
-                        }
-
-                        const faces = await detector.estimateFaces(video, { flipHorizontal: false });
-
-                        ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-                        if (faces && faces.length > 0) {
-                            const face = faces[0];
-                            const box = face.box;
-
-                            // 좌표가 모두 0인 경우에 대한 대응
-                            if (box.width === 0 && box.height === 0) {
-                                debug.innerText = "데이터 오류: 좌표가 0으로 수신됨 (재시도 중)";
-                            } else {
-                                debug.innerHTML = `감지됨! X:${Math.round(box.xMin)} Y:${Math.round(box.yMin)}<br>W:${Math.round(box.width)} H:${Math.round(box.height)}`;
-                                
-                                // 박스 그리기
-                                ctx.strokeStyle = "#00FF00";
-                                ctx.lineWidth = 6;
-                                ctx.strokeRect(box.xMin, box.yMin, box.width, box.height);
-                            }
-                        } else {
-                            debug.innerText = "얼굴을 찾는 중... (비디오 크기: " + video.videoWidth + "x" + video.videoHeight + ")";
-                        }
-                    }
-                    requestAnimationFrame(loop);
-                }
-                loop();
-            } catch (err) {
-                debug.innerText = "에러: " + err.message;
-            }
-        }
-
-        init();
-    </script>
-</body>
-</html>
+                // 2. 감지된 얼굴마다 바운딩 박스 그리기
+                for (const [index, detection] of results.detections.entries()) {
+                    // MediaPipe가 제공하는 그리기 도구 사용
+                    drawRectangle(canvasCtx, detection.boundingBox, {color: '#00FF00', lineWidth: 4, fillColor: '#00000000'});
+                    
+                    // 좌표 정보 추출 (0.0 ~ 1.0 비율 좌표 -> 픽셀 좌표 변환)
+                    const bbox = detection.boundingBox;
+                    const x = Math.floor(bbox.xCenter * canvasElement.width - (bbox.width * canvasElement.width / 2));
+                    const y = Math.floor(bbox.
