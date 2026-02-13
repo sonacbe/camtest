@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Face Detection v1.0 (Fixed)</title>
+    <title>Face Detection v1.1</title>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-core@4.10.0"></script>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-converter@4.10.0"></script>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-webgl@4.10.0"></script>
@@ -11,8 +11,28 @@
     <style>
         body { margin: 0; background: #000; overflow: hidden; font-family: monospace; }
         #container { position: relative; width: 100vw; height: 100vh; }
-        video { width: 100%; height: 100%; object-fit: contain; }
-        canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: contain; z-index: 10; pointer-events: none; }
+        
+        /* [수정됨] 영상 좌우 반전 */
+        video { 
+            width: 100%; 
+            height: 100%; 
+            object-fit: contain; 
+            transform: scaleX(-1); /* 좌우 반전 추가 */
+        }
+        
+        /* [수정됨] 캔버스도 같이 좌우 반전 (영상과 좌표 일치용) */
+        canvas { 
+            position: absolute; 
+            top: 0; 
+            left: 0; 
+            width: 100%; 
+            height: 100%; 
+            object-fit: contain; 
+            z-index: 10; 
+            pointer-events: none; 
+            transform: scaleX(-1); /* 좌우 반전 추가 */
+        }
+        
         #debug { position: fixed; top: 0; left: 0; right: 0; background: rgba(0,0,255,0.8); color: white; padding: 10px; z-index: 100; font-size: 11px; }
     </style>
 </head>
@@ -31,7 +51,6 @@
 
         async function init() {
             try {
-                // 1. 백엔드 설정
                 await tf.setBackend('webgl');
                 debug.innerText = "카메라 연결 중...";
 
@@ -41,12 +60,10 @@
                 });
                 video.srcObject = stream;
 
-                // [핵심 수정] 비디오 메타데이터 로드 시점까지 대기 후 크기 동기화
-                // TensorFlow.js가 비디오 텍스처를 읽으려면 video.width/height 속성이 필수입니다.
+                // 비디오 메타데이터 로드 시점까지 대기 후 크기 동기화 (좌표 0 문제 해결용)
                 await new Promise((resolve) => {
                     video.onloadedmetadata = () => {
-                        video.play(); // 명시적 재생
-                        // 비디오 태그의 내부 속성 크기를 스트림의 실제 크기로 강제 설정
+                        video.play();
                         video.width = video.videoWidth;
                         video.height = video.videoHeight;
                         canvas.width = video.videoWidth;
@@ -55,7 +72,6 @@
                     };
                 });
 
-                // 2. 모델 로드
                 const detector = await faceDetection.createDetector(
                     faceDetection.SupportedModels.MediaPipeFaceDetector,
                     { runtime: 'tfjs', modelType: 'short' }
@@ -64,18 +80,17 @@
                 debug.innerText = "모델 로드 완료. 감지 시작...";
 
                 async function loop() {
-                    // 비디오 상태 체크 강화
                     if (video.readyState >= 2 && video.videoWidth > 0) {
                         
-                        // 캔버스 크기 재확인 (반응형 대응)
                         if (canvas.width !== video.videoWidth) {
                             canvas.width = video.videoWidth;
                             canvas.height = video.videoHeight;
-                            video.width = video.videoWidth; // 비디오 속성도 다시 맞춤
+                            video.width = video.videoWidth;
                             video.height = video.videoHeight;
                         }
 
-                        const faces = await detector.estimateFaces(video, { flipHorizontal: false });
+                        // [수정됨] flipHorizontal: true 로 변경하여 감지 시 좌우 반전 적용
+                        const faces = await detector.estimateFaces(video, { flipHorizontal: true });
 
                         ctx.clearRect(0, 0, canvas.width, canvas.height);
 
@@ -83,7 +98,6 @@
                             const face = faces[0];
                             const box = face.box;
 
-                            // 0,0,0,0 체크
                             if (box.width === 0 && box.height === 0) {
                                 debug.innerText = "데이터 오류: 좌표가 0으로 수신됨 (TFJS 초기화 중)";
                             } else {
