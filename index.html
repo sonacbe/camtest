@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Face Detection v1.1</title>
+    <title>Face Detection v1.0 (Fixed)</title>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-core@4.10.0"></script>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-converter@4.10.0"></script>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-webgl@4.10.0"></script>
@@ -23,93 +23,92 @@
         <canvas id="canvas"></canvas>
     </div>
 
-<script>
-const video = document.getElementById('video');
-const canvas = document.getElementById('canvas');
-const ctx = canvas.getContext('2d');
-const debug = document.getElementById('debug');
+    <script>
+        const video = document.getElementById('video');
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        const debug = document.getElementById('debug');
 
-async function init() {
-    try {
-        await tf.setBackend('webgl');
-        await tf.ready();
+        async function init() {
+            try {
+                // 1. 백엔드 설정
+                await tf.setBackend('webgl');
+                debug.innerText = "카메라 연결 중...";
 
-        debug.innerText = "카메라 연결 중...";
+                const stream = await navigator.mediaDevices.getUserMedia({
+                    video: { facingMode: "user", width: { ideal: 640 }, height: { ideal: 480 } },
+                    audio: false
+                });
+                video.srcObject = stream;
 
-        const stream = await navigator.mediaDevices.getUserMedia({
-            video: { facingMode: "user", width: { ideal: 640 }, height: { ideal: 480 } },
-            audio: false
-        });
+                // [핵심 수정] 비디오 메타데이터 로드 시점까지 대기 후 크기 동기화
+                // TensorFlow.js가 비디오 텍스처를 읽으려면 video.width/height 속성이 필수입니다.
+                await new Promise((resolve) => {
+                    video.onloadedmetadata = () => {
+                        video.play(); // 명시적 재생
+                        // 비디오 태그의 내부 속성 크기를 스트림의 실제 크기로 강제 설정
+                        video.width = video.videoWidth;
+                        video.height = video.videoHeight;
+                        canvas.width = video.videoWidth;
+                        canvas.height = video.videoHeight;
+                        resolve();
+                    };
+                });
 
-        video.srcObject = stream;
+                // 2. 모델 로드
+                const detector = await faceDetection.createDetector(
+                    faceDetection.SupportedModels.MediaPipeFaceDetector,
+                    { runtime: 'tfjs', modelType: 'short' }
+                );
 
-        // 🎯 메타데이터 로드 대기
-        await new Promise(res => {
-            video.onloadedmetadata = () => res();
-        });
+                debug.innerText = "모델 로드 완료. 감지 시작...";
 
-        video.play();
+                async function loop() {
+                    // 비디오 상태 체크 강화
+                    if (video.readyState >= 2 && video.videoWidth > 0) {
+                        
+                        // 캔버스 크기 재확인 (반응형 대응)
+                        if (canvas.width !== video.videoWidth) {
+                            canvas.width = video.videoWidth;
+                            canvas.height = video.videoHeight;
+                            video.width = video.videoWidth; // 비디오 속성도 다시 맞춤
+                            video.height = video.videoHeight;
+                        }
 
-        // 🎯 캔버스 해상도 동기화
-        canvas.width = video.videoWidth;
-        canvas.height = video.videoHeight;
+                        const faces = await detector.estimateFaces(video, { flipHorizontal: false });
 
-        debug.innerText = "모델 로딩 중...";
+                        ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-        const detector = await faceDetection.createDetector(
-            faceDetection.SupportedModels.MediaPipeFaceDetector,
-            { runtime: 'tfjs', modelType: 'short' }
-        );
+                        if (faces && faces.length > 0) {
+                            const face = faces[0];
+                            const box = face.box;
 
-        // 🎯 모델 워밍업 (zero box 방지)
-        await detector.estimateFaces(video);
-
-        debug.innerText = "얼굴 탐지 시작";
-
-        async function loop() {
-
-            const faces = await detector.estimateFaces(video, { flipHorizontal: false });
-
-            ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-            if (faces && faces.length > 0) {
-                const face = faces[0];
-
-                // 🎯 box 필드 안전 파싱
-                const box = face.box || face.boundingBox;
-
-                if (box) {
-                    let x = box.xMin ?? box.x ?? 0;
-                    let y = box.yMin ?? box.y ?? 0;
-                    let w = box.width ?? (box.xMax - box.xMin);
-                    let h = box.height ?? (box.yMax - box.yMin);
-
-                    if (w > 0 && h > 0) {
-                        debug.innerHTML = `감지됨! X:${Math.round(x)} Y:${Math.round(y)}<br>W:${Math.round(w)} H:${Math.round(h)}`;
-
-                        ctx.strokeStyle = "#00FF00";
-                        ctx.lineWidth = 4;
-                        ctx.strokeRect(x, y, w, h);
-                    } else {
-                        debug.innerText = "박스 계산 대기 중...";
+                            // 0,0,0,0 체크
+                            if (box.width === 0 && box.height === 0) {
+                                debug.innerText = "데이터 오류: 좌표가 0으로 수신됨 (TFJS 초기화 중)";
+                            } else {
+                                debug.innerHTML = `감지됨! X:${Math.round(box.xMin)} Y:${Math.round(box.yMin)}<br>W:${Math.round(box.width)} H:${Math.round(box.height)}`;
+                                
+                                ctx.strokeStyle = "#00FF00";
+                                ctx.lineWidth = 6;
+                                ctx.strokeRect(box.xMin, box.yMin, box.width, box.height);
+                            }
+                        } else {
+                            debug.innerText = `얼굴을 찾는 중... (${video.videoWidth}x${video.videoHeight})`;
+                        }
                     }
+                    requestAnimationFrame(loop);
                 }
-            } else {
-                debug.innerText = `얼굴 탐색 중... (${video.videoWidth}x${video.videoHeight})`;
-            }
+                
+                loop();
 
-            requestAnimationFrame(loop);
+            } catch (err) {
+                console.error(err);
+                debug.innerText = "에러 발생: " + err.message;
+            }
         }
 
-        loop();
-
-    } catch (err) {
-        debug.innerText = "에러: " + err.message;
-    }
-}
-
-init();
-</script>
+        init();
+    </script>
 </body>
 </html>
-
