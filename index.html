@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Face Detection v1.1</title>
+    <title>camTest v1.2</title>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-core@4.10.0"></script>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-converter@4.10.0"></script>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-webgl@4.10.0"></script>
@@ -12,15 +12,16 @@
         body { margin: 0; background: #000; overflow: hidden; font-family: monospace; }
         #container { position: relative; width: 100vw; height: 100vh; }
         
-        /* [수정됨] 영상 좌우 반전 */
+        /* 영상은 거울모드로 보이기 위해 좌우 반전 */
         video { 
             width: 100%; 
             height: 100%; 
             object-fit: contain; 
-            transform: scaleX(-1); /* 좌우 반전 추가 */
+            transform: scaleX(-1); 
         }
         
-        /* [수정됨] 캔버스도 같이 좌우 반전 (영상과 좌표 일치용) */
+        /* [수정됨] 캔버스는 반전시키지 않습니다. */
+        /* JS에서 인식할 때 이미 반전된 좌표를 받아오므로, 캔버스는 정방향이어야 위치가 맞습니다. */
         canvas { 
             position: absolute; 
             top: 0; 
@@ -30,7 +31,7 @@
             object-fit: contain; 
             z-index: 10; 
             pointer-events: none; 
-            transform: scaleX(-1); /* 좌우 반전 추가 */
+            /* transform: scaleX(-1); <--- 이 부분을 제거했습니다 */
         }
         
         #debug { position: fixed; top: 0; left: 0; right: 0; background: rgba(0,0,255,0.8); color: white; padding: 10px; z-index: 100; font-size: 11px; }
@@ -60,7 +61,6 @@
                 });
                 video.srcObject = stream;
 
-                // 비디오 메타데이터 로드 시점까지 대기 후 크기 동기화 (좌표 0 문제 해결용)
                 await new Promise((resolve) => {
                     video.onloadedmetadata = () => {
                         video.play();
@@ -89,7 +89,7 @@
                             video.height = video.videoHeight;
                         }
 
-                        // [수정됨] flipHorizontal: true 로 변경하여 감지 시 좌우 반전 적용
+                        // flipHorizontal: true 유지 (인식 시 내부적으로 반전)
                         const faces = await detector.estimateFaces(video, { flipHorizontal: true });
 
                         ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -99,7 +99,7 @@
                             const box = face.box;
 
                             if (box.width === 0 && box.height === 0) {
-                                debug.innerText = "데이터 오류: 좌표가 0으로 수신됨 (TFJS 초기화 중)";
+                                debug.innerText = "데이터 오류: 좌표 재조정 중...";
                             } else {
                                 debug.innerHTML = `감지됨! X:${Math.round(box.xMin)} Y:${Math.round(box.yMin)}<br>W:${Math.round(box.width)} H:${Math.round(box.height)}`;
                                 
